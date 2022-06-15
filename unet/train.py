@@ -312,6 +312,7 @@ def train_model(model, optimizer, scheduler, dataloaders,
                               f'Val bce: {last_val_bce:.5f}; '
                               f'Val dice: {last_val_dice:.5f}')
                 else:
+                    np_loss = metrics['loss'] / batch_size
                     losses[f'{phase}_loss'].append(np_loss)
                     # report losses to terminal
                     if phase == 'val':
