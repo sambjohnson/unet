@@ -312,11 +312,11 @@ def train_model(model, optimizer, scheduler, dataloaders,
                               f'Val bce: {last_val_bce:.5f}; '
                               f'Val dice: {last_val_dice:.5f}')
                 else:
-                    losses[f'{phase}_total'].append(np_loss)
+                    losses[f'{phase}_loss'].append(np_loss)
                     # report losses to terminal
                     if phase == 'val':
-                        last_trn_loss = losses['trn_total'][-1]
-                        last_val_loss = losses['val_total'][-1]
+                        last_trn_loss = losses['trn_loss'][-1]
+                        last_val_loss = losses['val_loss'][-1]
                         print(f'Train loss: {last_trn_loss:.5f}; '
                               f'Val loss: {last_val_loss:.5f}')
 
