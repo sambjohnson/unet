@@ -114,6 +114,7 @@ def train_model(model, optimizer, scheduler, dataloaders,
                 checkpoint_every=100,
                 logits=None,
                 bce_weight=0.5,
+                loss_fn=None,
                 reweight=True,
                 smoothing=1):
     """Trains and returns a model based on the various optional arguments.
@@ -172,6 +173,9 @@ def train_model(model, optimizer, scheduler, dataloaders,
     bce_weight : float, optional
         The weight to give the BCE-based loss; the weight for the 
         dice-coefficient loss is always `1 - bce_weight`. The default is `0.5`.
+    loss_fn : torch loss function instance; if none, BCE-DICE is used. Otherwise
+        this is overridden. Doing so renders bce_weight, reweight, smoothing,
+        etc., unnecessary.
     reweight : boolean, optional
         Whether to reweight the classes by calculating the BCE for each class
         then calculating the mean across classes. If `False`, then the raw BCE
@@ -207,8 +211,12 @@ def train_model(model, optimizer, scheduler, dataloaders,
     dlti = iter(dlt)
     dlvi = iter(dlv)
     checkpoint_samples = dlv.batch_size * checkpoint_every
-    losses = {'i': [], 'trn_dice': [], 'trn_bce': [],
-              'trn_total': [], 'val_dice': [], 'val_bce': [], 'val_total': []}
+    if loss_fn is not None:
+        losses = {'i': [], 'trn_loss': [], 'val_loss': []}
+    else:
+        losses = {'i': [], 'trn_dice': [], 'trn_bce': [],
+                  'trn_total': [], 'val_dice': [], 'val_bce': [],
+                  'val_total': []}
     if num_batches is None:  # number of batches is set by num_epochs if not directly specified
         num_batches = num_epochs // dlt.batch_size
 
@@ -261,12 +269,20 @@ def train_model(model, optimizer, scheduler, dataloaders,
             # Calculate the forward model.
             with torch.set_grad_enabled(phase == 'trn'):
                 outputs = model(inputs.float())
-                loss = calc_loss(outputs, labels,
-                                 logits=logits,
-                                 bce_weight=bce_weight,
-                                 smoothing=smoothing,
-                                 reweight=reweight,
-                                 metrics=metrics)
+                if loss_fn is not None:
+                    loss = loss_fn(outputs, labels)
+
+                    if metrics is not None:
+                        if 'loss' not in metrics: metrics['loss'] = 0.0
+                        metrics['loss'] += \
+                            loss.data.cpu().numpy() * labels.size(0)
+                else:
+                    loss = calc_loss(outputs, labels,
+                                     logits=logits,
+                                     bce_weight=bce_weight,
+                                     smoothing=smoothing,
+                                     reweight=reweight,
+                                     metrics=metrics)
                 # backward + optimize only if in training phase
                 if phase == 'trn':
                     loss.backward()
@@ -278,22 +294,31 @@ def train_model(model, optimizer, scheduler, dataloaders,
                 # append losses to running lists (to plot training / val curves)
                 if phase == 'trn':  # only required to add batch number for one phase
                     losses['i'].append(i)
-                np_bce = metrics['bce'] / batch_size
-                np_dice = metrics['dice'] / batch_size
-                np_loss = metrics['loss'] / batch_size
-                losses[f'{phase}_bce'].append(np_bce)
-                losses[f'{phase}_dice'].append(np_dice)
-                losses[f'{phase}_total'].append(np_loss)
-                # report losses to terminal
-                if phase == 'val':
-                    last_trn_loss = losses['trn_total'][-1]
-                    last_val_loss = losses['val_total'][-1]
-                    last_val_bce = losses['val_bce'][-1]
-                    last_val_dice = losses['val_dice'][-1]
-                    print(f'Train loss: {last_trn_loss:.5f}; '
-                          f'Val loss: {last_val_loss:.5f}; '
-                          f'Val bce: {last_val_bce:.5f}; '
-                          f'Val dice: {last_val_dice:.5f}')
+                if loss_fn is None:
+                    np_bce = metrics['bce'] / batch_size
+                    np_dice = metrics['dice'] / batch_size
+                    np_loss = metrics['loss'] / batch_size
+                    losses[f'{phase}_bce'].append(np_bce)
+                    losses[f'{phase}_dice'].append(np_dice)
+                    losses[f'{phase}_total'].append(np_loss)
+                    # report losses to terminal
+                    if phase == 'val':
+                        last_trn_loss = losses['trn_total'][-1]
+                        last_val_loss = losses['val_total'][-1]
+                        last_val_bce = losses['val_bce'][-1]
+                        last_val_dice = losses['val_dice'][-1]
+                        print(f'Train loss: {last_trn_loss:.5f}; '
+                              f'Val loss: {last_val_loss:.5f}; '
+                              f'Val bce: {last_val_bce:.5f}; '
+                              f'Val dice: {last_val_dice:.5f}')
+                else:
+                    losses[f'{phase}_total'].append(np_loss)
+                    # report losses to terminal
+                    if phase == 'val':
+                        last_trn_loss = losses['trn_total'][-1]
+                        last_val_loss = losses['val_total'][-1]
+                        print(f'Train loss: {last_trn_loss:.5f}; '
+                              f'Val loss: {last_val_loss:.5f}')
 
             allmetrics[phase] = metrics
             # statistics: model checkpointing
@@ -307,8 +332,9 @@ def train_model(model, optimizer, scheduler, dataloaders,
                         savestr = "*"
                         best_loss = checkpoint_loss
                         best_model_wts = copy.deepcopy(model.state_dict())
-                    if metrics['dice'] < best_dice:
-                        best_dice = metrics['dice']
+                    if loss_fn is not None:
+                        if metrics['dice'] < best_dice:
+                            best_dice = metrics['dice']
                 time_elapsed = time.time() - since
                 log_epoch(allmetrics, i, num_epochs, lr0, time_elapsed,
                           endl=savestr, logger=logger)
@@ -332,7 +358,11 @@ def train_model(model, optimizer, scheduler, dataloaders,
     # save losses
     with open(f'{save_path}/complete_loss_history.pkl', 'wb') as f:
         pickle.dump(losses, f)
-    return model, best_loss, best_dice, losses
+
+    if loss_fn is None:
+        return model, best_loss, best_dice, losses
+    else:
+        return model, best_loss, losses
 
 
 def _make_dataloaders_and_model(dataloaders=None,
