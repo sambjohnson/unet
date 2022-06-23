@@ -19,8 +19,15 @@ use in and with the `visual_autolabel` library.
 # Logging
 # These are strings that encapsulate the printing of training information to the
 # terminal or to a log-file.
-from .util import _tensor_to_number
+
+import os
 import pickle
+
+from .util import _tensor_to_number
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from ..user.utils import get_device
 
 log_header_format = "%-5s  %-7s  %-5s   %-8s  %-8s  %-8s   %-8s  %-8s  %-8s"
 log_format = " | ".join(["%2d/%2d  %7.5f  %5.1f", 
@@ -100,6 +107,73 @@ def log_epoch(metrics, epochno=None, epochmax=None, lr=None, dt=None,
 
 #-------------------------------------------------------------------------------
 # Training
+
+def train(model, loss, optimizer, dl_dict, nbatches, save_path, rp=5, cp=100,
+          scheduler=None, device=None):
+    """ Train loop.
+    """
+
+    losses = {'trn': [], 'val': []}
+    dis = {'trn': iter(dl_dict['trn']), 'val': iter(dl_dict['val'])}
+
+    for i in range(nbatches):
+        if i % cp == 0 or i % rp == 0:
+            # only do val if checkpoint or report point
+            phases = ['trn', 'val']
+        else:
+            phases = ['trn']
+        for phase in phases:
+            dl = dl_dict[phase]
+            di = dis[phase]
+            # data
+            try:
+                # samples the batch
+                x, y = next(di)
+                x = x.to(device)
+                y = y.to(device)
+            except StopIteration:
+                # restart the generator if epoch ends
+                di = iter(dl_dict[phase])
+                dis[phase] = di  # ensure dictionary is updated
+                x, y = next(di)
+                x = x.to(device)
+                y = y.to(device)
+            if phase == 'trn':
+                model.train()
+                with torch.set_grad_enabled(True):
+                    ypred = model(x)
+                    l = loss(ypred, y)
+                    l.backward()
+                    optimizer.step()
+                    if rp:
+                        losses[phase].append(l.data.cpu().numpy())
+
+            else:
+                model.eval()
+                with torch.set_grad_enabled(False):
+                    ypred = model(x)
+                    l = loss(ypred, y)
+                    if rp:
+                        losses[phase].append(l.data.cpu().numpy())
+                        # report
+                        trn_loss = losses['trn'][-1]
+                        val_loss = losses['val'][-1]
+                        print(f'Batch: {i} ## Train loss:'
+                              f'## {trn_loss} ## Val loss: {val_loss}')
+
+            if cp:
+                save_name = os.path.join(save_path, "model%06d.pkl" % i)
+                torch.save(model.state_dict(), save_name)
+                save_name = os.path.join(save_path, "optim%06d.pkl" % i)
+                torch.save(optimizer.state_dict(), save_name)
+                with open(f'{save_path}/loss_history_{i}.pkl', 'wb') as f:
+                    pickle.dump(losses, f)
+
+        # update learning rates if necessary
+        if scheduler is not None:
+            scheduler.step(i)
+
+    return model, losses
 
 
 def train_model(model, optimizer, scheduler, dataloaders,
@@ -333,7 +407,7 @@ def train_model(model, optimizer, scheduler, dataloaders,
                         savestr = "*"
                         best_loss = checkpoint_loss
                         best_model_wts = copy.deepcopy(model.state_dict())
-                    if loss_fn is not None:
+                    if loss_fn is None:
                         if metrics['dice'] < best_dice:
                             best_dice = metrics['dice']
                 time_elapsed = time.time() - since

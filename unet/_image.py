@@ -8,7 +8,17 @@
 
 #-------------------------------------------------------------------------------
 # External Libries
-import os, sys, time, copy, pimms, PIL, warnings, torch
+import os
+import sys
+import time
+import copy
+import collections
+import pimms
+import PIL
+import warnings
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import scipy as sp
 import nibabel as nib
@@ -224,3 +234,63 @@ class UNet(torch.nn.Module):
         if self.apply_sigmoid:
             out = torch.sigmoid(out)
         return out
+
+
+class LNet(UNet):
+    """
+        An architecture with the same descending resnet backbone as the UNet
+        class, but truncated at the middlemost layer; optional configuration
+        of final fc layers. Suitable for regression.
+        Parameters:
+            feature_count: (int) number of input features
+            fc_list: list of hidden dimensions of the final fc layers
+                (default: [256, 64, pred_count])
+            class_count: (int) number of output classes of base UNet.
+            pred_count: (int, optional)
+                dimension of the y-values to predict (default: 1)
+            pretrained_weights: (PyTorch state_dict, optional)
+                pretrained weights with which to initialize model.
+            apply_sigmoid: (bool, optional) whether the underlying UNet
+                has apply_sigmoid. (default: false)
+    """
+    def __init__(self, feature_count, class_count, fc_list=None,
+                 pretrained_weights=None,
+                 apply_sigmoid=False):
+        super().__init__(feature_count=feature_count,
+                         class_count=class_count,
+                         apply_sigmoid=apply_sigmoid)
+
+        # load weights into UNet backbone
+        if pretrained_weights is not None:
+            if not isinstance(pretrained_weights, collections.OrderedDict):
+                raise TypeError('Must be Pytorch params, '
+                                'which are an Ordered Dict.')
+            else:
+                self.load_state_dict(pretrained_weights)
+
+        self.pool = nn.AdaptiveAvgPool2d(output_size=(1, 1))
+
+        # parse fc inputs
+        fc_in = 512
+        if fc_list is None:
+            fc_list = [256, 64, 1]
+        fcs = [fc_in] + fc_list
+        self.fcs = nn.ModuleList()
+        for i, o in zip(fcs[:-1], fcs[1:]):
+            self.fcs.append(nn.Linear(i, o))
+
+        # cache middle state
+        self.middle = None
+
+    def forward(self, x):
+        x = self.layer0(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        # self.middle = copy.deepcopy(x)
+        x = self.pool(x)
+        x = torch.flatten(x, start_dim=1)
+        for fc in self.fcs:
+            x = F.elu(fc(x))
+        return x

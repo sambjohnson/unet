@@ -20,6 +20,7 @@ import os
 import sys
 import pickle
 import struct
+import copy
 from array import array
 
 # --- image processing imports --- #
@@ -65,7 +66,33 @@ def set_unfreeze_(model, submodules_to_unfreeze):
     return
 
 
-def imshow(inp, title=None, normalize=False, figsize=None, cmap=None):
+def make_pretrained_state_dict(model_state, pretrained_state):
+    """ Helper function to load copy a portion of a model's state
+        from another model with (partially) overlapping architecture.
+        Args:
+            model_state: a PyTorch-style OrderedDict with the target state
+                of the model to initialize
+            pretrained_state: a PyTorch-style OrderedDict with the loaded
+                (presumably pretrained) parameters from a partially comparable
+                model.
+        Returns:
+            warmstart_state: a state_dict that is equal to an updated version
+            model_state, where keys that are also present in pretrained_state
+            are updated to their values in that state. E.g., pretrained_state
+            may be the parameters of a large, pretrained model, and model_state
+            may be the state of an architecture that only uses some of that
+            model's first layeres.
+
+    """
+    pd = pretrained_state
+    sd = model_state
+    warmstart_params = copy.deepcopy(sd)
+    for k, v in pd.items():
+        warmstart_params[k] = v
+    return warmstart_params
+
+
+def imshow(inp, title=None, normalize=False, figsize=None):
     """ Imshow for Tensor. Visualizes images in a grid. """
     inp = inp.numpy().transpose((1, 2, 0))
     
@@ -79,66 +106,9 @@ def imshow(inp, title=None, normalize=False, figsize=None, cmap=None):
         inp = std * inp + mean
         inp = np.clip(inp, 0, 1)
     
-    plt.figure(figsize=figsize)
-    plt.imshow(inp, cmap=cmap)
+    plt.figure(figsize = figsize)
+    plt.imshow(inp)
     if title is not None:
         plt.title(title)
     plt.pause(0.001)  # pause a bit so that plots are updated
-
-
-def _get_nclasses_orig(agg_dict):
-    return max(max(list(agg_dict.values()))) + 1
-
-
-def _make_agg_matrix(n_orig_classes, agg_dict, dtype=torch.int64):
-    """ Internal method to create matrix which collapses one-hot
-        encoded classes into a smaller number of aggregate classes
-        by matrix multiplication. For example:
-        Args:
-            n_orig_classes: (int) number of classes in input
-            agg_dict: a dictionary mapping the output classes to
-                desired groups of input classes, e.g. lists. Example:
-                agg_dict = {0: [0], 1: [1, 2, 3], 2: [4, 5]}
-        Returns:
-            a matrix of zeros and ones that will transform a one-hot
-            encoded class into the appropriate aggregate class. E.g.,
-            with the above example agg_dict, we would have
-                agg_matrix = [[1, 0, 0,],
-                              [0, 1, 0],
-                              [0, 1, 0],
-                              [0, 1, 0],
-                              [0, 0, 1],
-                              [0, 0, 1]]
-                so that:
-                    [1, 0, 0, 0, 0, 0] * agg_matrix = [1, 0, 0]  # class 0 -> class 0
-                    [0, 0, 0, 1, 0, 0] * agg_matrix = [0, 1, 0]  # class 3 -> class 1
-                    [0, 0, 0, 0, 1, 0] * agg_matrix = [0, 0, 1]  # class 4 -> class 2
-    """
-    n_agg_classes = len(set(agg_dict.keys()))
-    agg_matrix = torch.zeros(n_orig_classes, n_agg_classes, dtype=dtype)
-    for k, v in agg_dict.items():
-        agg_matrix[v, k] = 1
-    return agg_matrix
-
-
-def aggregate_classes(y, agg_matrix):
-    assert len(y.shape) == 3 or len(y.shape) == 4
-    if len(y.shape) == 3:
-        inds_permute = (1, 2, 0)
-        inds_unpermute = (2, 0, 1)
-    elif len(y.shape) == 4:
-        inds_permute = (0, 2, 3, 1)
-        inds_unpermute = (0, 3, 1, 2)
-    return torch.permute(torch.matmul(torch.permute(y, inds_permute), agg_matrix), inds_unpermute)
-
-
-# helper functions for visualization of onehot-encoded labels
-def from_onehot(y, batch=True):
-    axis = 1 if batch else 0
-    return torch.argmax(y, dim=axis)
-
-
-def y_vis_sample(y):
-    y_collapsed = from_onehot(y, batch=False)
-    return torch.unsqueeze(y_collapsed, dim=0)
 
