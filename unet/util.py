@@ -13,7 +13,7 @@ The `visual_autolabel.util` package contains utilities for use in and with the
 
 # Global Config Items.
 # from .config import (default_partition, sids)  # commented out, as unnecessary.
-
+import torch
 
 #===============================================================================
 # Utility Functions
@@ -21,6 +21,11 @@ The `visual_autolabel.util` package contains utilities for use in and with the
 #-------------------------------------------------------------------------------
 # Subject Partitions
 # Code for dealing with partitions of training and validation subjects.
+
+def get_device():
+    """ Returns gpu if available, cpu otherwise."""
+    return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 
 def _tensor_to_number(t):
     """Returns the raw numerical data stored in a torch tensor."""

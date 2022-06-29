@@ -24,10 +24,11 @@ import os
 import pickle
 
 from .util import _tensor_to_number
+from .util import get_device
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ..user.utils import get_device
 
 log_header_format = "%-5s  %-7s  %-5s   %-8s  %-8s  %-8s   %-8s  %-8s  %-8s"
 log_format = " | ".join(["%2d/%2d  %7.5f  %5.1f", 
